@@ -215,6 +215,7 @@ export default function App() {
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
   const [category, setCategory] = useState('ทั่วไป');
+  const [customCategory, setCustomCategory] = useState('');
   const [date, setDate] = useState(today());
   const [newCategory, setNewCategory] = useState('');
   const [budgetCategory, setBudgetCategory] = useState('อาหาร');
@@ -276,22 +277,23 @@ export default function App() {
   const monthTransactions = transactions.filter((x) => (x.transaction_date || x.created_at?.slice(0, 10) || '').startsWith(month));
   const visible = monthTransactions.filter((x) => (filter === 'all' || x.type === filter) && (categoryFilter === 'ทั้งหมด' || x.category === categoryFilter) && x.title.toLowerCase().includes(search.trim().toLowerCase()));
 
-  function resetForm() { setEditing(null); setType('expense'); setTitle(''); setAmount(''); setCategory(categories[0] || 'ทั่วไป'); setDate(today()); setTransactionError(''); }
+  function resetForm() { setEditing(null); setType('expense'); setTitle(''); setAmount(''); setCategory(categories[0] || 'ทั่วไป'); setCustomCategory(''); setDate(today()); setTransactionError(''); }
   function openAdd() { resetForm(); setTransactionModal(true); }
-  function openEdit(item) { setEditing(item); setType(item.type); setTitle(item.title); setAmount(String(item.amount)); setCategory(item.category); setDate(item.transaction_date || item.created_at.slice(0, 10)); setTransactionModal(true); }
+  function openEdit(item) { setEditing(item); setType(item.type); setTitle(item.title); setAmount(String(item.amount)); setCategory(categories.includes(item.category) ? item.category : 'อื่นๆ'); setCustomCategory(categories.includes(item.category) ? '' : item.category); setDate(item.transaction_date || item.created_at.slice(0, 10)); setTransactionError(''); setTransactionModal(true); }
 
   async function saveTransaction() {
     const numeric = Number(amount.replace(/,/g, ''));
+    const chosenCategory = category === 'อื่นๆ' ? customCategory.trim() : category;
     setTransactionError('');
-    if (!title.trim() || !Number.isFinite(numeric) || numeric <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      setTransactionError('กรอกชื่อ จำนวนเงิน และวันที่รูปแบบ YYYY-MM-DD ให้ครบ');
+    if (!title.trim() || !Number.isFinite(numeric) || numeric <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !chosenCategory) {
+      setTransactionError('กรอกชื่อ จำนวนเงิน วันที่ และหมวดหมู่ให้ครบ');
       return;
     }
     if (!demo && (!user?.id || !token)) {
       setTransactionError('เซสชันหมดอายุ กรุณาออกจากระบบแล้วเข้าสู่ระบบใหม่');
       return;
     }
-    const row = { title: title.trim(), amount: numeric, type, category, transaction_date: date };
+    const row = { title: title.trim(), amount: numeric, type, category: chosenCategory, transaction_date: date };
     setSavingTransaction(true);
     try {
       if (demo) {
@@ -384,7 +386,7 @@ export default function App() {
     </Animated.View>} ListEmptyComponent={loading ? <ActivityIndicator color={C.green} /> : <View style={s.empty}><Text style={s.emptyEmoji}>🌱</Text><Text style={s.emptyTitle}>ไม่พบรายการ</Text><Text style={s.smallMuted}>ลองเปลี่ยนตัวกรองหรือเพิ่มรายการใหม่</Text></View>} />
     <Animated.View style={[s.fab, { transform: [{ scale: pulse }] }]}><Pressable style={s.fabPress} onPress={openAdd}><Text style={s.fabText}>＋ เพิ่มรายการ</Text></Pressable></Animated.View>
 
-    <Modal visible={transactionModal} transparent animationType="slide" onRequestClose={() => setTransactionModal(false)}><KeyboardAvoidingView style={s.overlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'flex-end' }} keyboardShouldPersistTaps="handled"><View style={s.sheet}><View style={s.handle} /><Text style={s.sheetTitle}>{editing ? 'แก้ไขรายการ' : 'เพิ่มรายการใหม่'}</Text><View style={s.segment}>{['income','expense'].map((x) => <Pressable key={x} onPress={() => setType(x)} style={[s.segmentButton, type === x && { backgroundColor: x === 'income' ? C.green : C.red }]}><Text style={[s.segmentText, type === x && { color: C.white }]}>{x === 'income' ? '＋ รายรับ' : '− รายจ่าย'}</Text></Pressable>)}</View><Text style={s.label}>ชื่อรายการ</Text><TextInput style={s.input} value={title} onChangeText={setTitle} placeholder="เช่น ค่าอาหาร" /><Text style={s.label}>จำนวนเงิน</Text><TextInput style={[s.input, { fontSize: 20, fontWeight: '800' }]} value={amount} onChangeText={setAmount} keyboardType="numeric" placeholder="0" /><Text style={s.label}>วันที่ (YYYY-MM-DD)</Text><TextInput style={s.input} value={date} onChangeText={setDate} placeholder="2026-09-23" /><Text style={s.label}>หมวดหมู่</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.categoryChoices}>{categories.map((x) => <Pressable key={x} onPress={() => setCategory(x)} style={[s.categoryChoice, category === x && s.categoryChoiceOn]}><Text style={[s.categoryChoiceText, category === x && { color: C.green, fontWeight: '800' }]}>{x}</Text></Pressable>)}</ScrollView>{!!transactionError && <Text style={s.formError}>{transactionError}</Text>}<Pressable disabled={savingTransaction} style={[s.primary, savingTransaction && { opacity: 0.6 }]} onPress={saveTransaction}><Text style={s.primaryText}>{savingTransaction ? 'กำลังบันทึก...' : editing ? 'บันทึกการแก้ไข' : 'บันทึกรายการ'}</Text></Pressable><Pressable disabled={savingTransaction} style={s.cancel} onPress={() => setTransactionModal(false)}><Text style={s.cancelText}>ยกเลิก</Text></Pressable></View></ScrollView></KeyboardAvoidingView></Modal>
+    <Modal visible={transactionModal} transparent animationType="slide" onRequestClose={() => setTransactionModal(false)}><KeyboardAvoidingView style={s.overlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'flex-end' }} keyboardShouldPersistTaps="handled"><View style={s.sheet}><View style={s.handle} /><Text style={s.sheetTitle}>{editing ? 'แก้ไขรายการ' : 'เพิ่มรายการใหม่'}</Text><View style={s.segment}>{['income','expense'].map((x) => <Pressable key={x} onPress={() => setType(x)} style={[s.segmentButton, type === x && { backgroundColor: x === 'income' ? C.green : C.red }]}><Text style={[s.segmentText, type === x && { color: C.white }]}>{x === 'income' ? '＋ รายรับ' : '− รายจ่าย'}</Text></Pressable>)}</View><Text style={s.label}>ชื่อรายการ</Text><TextInput style={s.input} value={title} onChangeText={setTitle} placeholder="เช่น ค่าอาหาร" /><Text style={s.label}>จำนวนเงิน</Text><TextInput style={[s.input, { fontSize: 20, fontWeight: '800' }]} value={amount} onChangeText={setAmount} keyboardType="numeric" placeholder="0" /><Text style={s.label}>วันที่ (YYYY-MM-DD)</Text><TextInput style={s.input} value={date} onChangeText={setDate} placeholder="2026-09-23" /><Text style={s.label}>หมวดหมู่</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.categoryChoices}>{[...categories.filter((x) => x !== 'อื่นๆ'), 'อื่นๆ'].map((x) => <Pressable key={x} onPress={() => setCategory(x)} style={[s.categoryChoice, category === x && s.categoryChoiceOn]}><Text style={[s.categoryChoiceText, category === x && { color: C.green, fontWeight: '800' }]}>{x}</Text></Pressable>)}</ScrollView>{category === 'อื่นๆ' && <TextInput autoFocus style={s.input} value={customCategory} onChangeText={setCustomCategory} placeholder="พิมพ์ชื่อหมวดหมู่ เช่น สุขภาพ" />}{!!transactionError && <Text style={s.formError}>{transactionError}</Text>}<Pressable disabled={savingTransaction} style={[s.primary, savingTransaction && { opacity: 0.6 }]} onPress={saveTransaction}><Text style={s.primaryText}>{savingTransaction ? 'กำลังบันทึก...' : editing ? 'บันทึกการแก้ไข' : 'บันทึกรายการ'}</Text></Pressable><Pressable disabled={savingTransaction} style={s.cancel} onPress={() => setTransactionModal(false)}><Text style={s.cancelText}>ยกเลิก</Text></Pressable></View></ScrollView></KeyboardAvoidingView></Modal>
 
     <Modal visible={categoryModal} transparent animationType="slide" onRequestClose={() => setCategoryModal(false)}><KeyboardAvoidingView style={s.overlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={s.sheet}><View style={s.handle} /><Text style={s.sheetTitle}>จัดการหมวดหมู่</Text><View style={s.inline}><TextInput style={[s.input, { flex: 1, marginBottom: 0 }]} value={newCategory} onChangeText={setNewCategory} placeholder="ชื่อหมวดหมู่ใหม่" /><Pressable style={s.addSmall} onPress={addCategory}><Text style={s.primaryText}>เพิ่ม</Text></Pressable></View><View style={{ marginTop: 16 }}>{categories.map((x) => <View key={x} style={s.manageRow}><Text style={s.manageName}>{x}</Text>{!DEFAULT_CATEGORIES.includes(x) && <Pressable onPress={() => removeCategory(x)}><Text style={s.delete}>ลบ</Text></Pressable>}</View>)}</View><Pressable style={s.cancel} onPress={() => setCategoryModal(false)}><Text style={s.cancelText}>เสร็จแล้ว</Text></Pressable></View></KeyboardAvoidingView></Modal>
 
