@@ -91,8 +91,24 @@ async function restRequest(path, token, options = {}) {
       ...(options.headers || {}),
     },
   });
-  if (!res.ok) throw new Error(await res.text());
-  return res.status === 204 ? null : res.json();
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (_) { data = text; }
+  if (!res.ok) {
+    const raw = data?.message || data?.details || data?.hint || data || 'เชื่อมต่อฐานข้อมูลไม่สำเร็จ';
+    const message = String(raw);
+    if (/user_id|transaction_date|schema cache|column/i.test(message)) {
+      throw new Error('โครงสร้างตาราง transactions ยังไม่ครบ กรุณารัน SQL migration ใน README บน Supabase');
+    }
+    if (/row-level security|policy|permission denied|42501/i.test(message)) {
+      throw new Error('Supabase ปฏิเสธสิทธิ์บันทึก กรุณาตรวจ RLS policy ของตาราง transactions');
+    }
+    if (/relation .* does not exist|42P01/i.test(message)) {
+      throw new Error('ยังไม่พบตารางที่แอปต้องใช้ กรุณารัน SQL migration ใน README บน Supabase');
+    }
+    throw new Error(message);
+  }
+  return data;
 }
 
 function AuthScreen({ onSession, onDemo }) {
@@ -190,6 +206,8 @@ export default function App() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [transactionModal, setTransactionModal] = useState(false);
+  const [transactionError, setTransactionError] = useState('');
+  const [savingTransaction, setSavingTransaction] = useState(false);
   const [categoryModal, setCategoryModal] = useState(false);
   const [budgetModal, setBudgetModal] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -258,14 +276,23 @@ export default function App() {
   const monthTransactions = transactions.filter((x) => (x.transaction_date || x.created_at?.slice(0, 10) || '').startsWith(month));
   const visible = monthTransactions.filter((x) => (filter === 'all' || x.type === filter) && (categoryFilter === 'ทั้งหมด' || x.category === categoryFilter) && x.title.toLowerCase().includes(search.trim().toLowerCase()));
 
-  function resetForm() { setEditing(null); setType('expense'); setTitle(''); setAmount(''); setCategory(categories[0] || 'ทั่วไป'); setDate(today()); }
+  function resetForm() { setEditing(null); setType('expense'); setTitle(''); setAmount(''); setCategory(categories[0] || 'ทั่วไป'); setDate(today()); setTransactionError(''); }
   function openAdd() { resetForm(); setTransactionModal(true); }
   function openEdit(item) { setEditing(item); setType(item.type); setTitle(item.title); setAmount(String(item.amount)); setCategory(item.category); setDate(item.transaction_date || item.created_at.slice(0, 10)); setTransactionModal(true); }
 
   async function saveTransaction() {
     const numeric = Number(amount.replace(/,/g, ''));
-    if (!title.trim() || numeric <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { Alert.alert('ข้อมูลไม่ครบ', 'กรอกชื่อ จำนวนเงิน และวันที่รูปแบบ YYYY-MM-DD'); return; }
+    setTransactionError('');
+    if (!title.trim() || !Number.isFinite(numeric) || numeric <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setTransactionError('กรอกชื่อ จำนวนเงิน และวันที่รูปแบบ YYYY-MM-DD ให้ครบ');
+      return;
+    }
+    if (!demo && (!user?.id || !token)) {
+      setTransactionError('เซสชันหมดอายุ กรุณาออกจากระบบแล้วเข้าสู่ระบบใหม่');
+      return;
+    }
     const row = { title: title.trim(), amount: numeric, type, category, transaction_date: date };
+    setSavingTransaction(true);
     try {
       if (demo) {
         if (editing) setTransactions((old) => old.map((x) => x.id === editing.id ? { ...x, ...row } : x));
@@ -278,7 +305,8 @@ export default function App() {
         setTransactions((old) => [data[0], ...old]);
       }
       setTransactionModal(false); resetForm();
-    } catch (error) { Alert.alert('บันทึกไม่สำเร็จ', error.message); }
+    } catch (error) { setTransactionError(error.message || 'บันทึกรายการไม่สำเร็จ'); }
+    finally { setSavingTransaction(false); }
   }
 
   function askDelete(item) {
@@ -356,7 +384,7 @@ export default function App() {
     </Animated.View>} ListEmptyComponent={loading ? <ActivityIndicator color={C.green} /> : <View style={s.empty}><Text style={s.emptyEmoji}>🌱</Text><Text style={s.emptyTitle}>ไม่พบรายการ</Text><Text style={s.smallMuted}>ลองเปลี่ยนตัวกรองหรือเพิ่มรายการใหม่</Text></View>} />
     <Animated.View style={[s.fab, { transform: [{ scale: pulse }] }]}><Pressable style={s.fabPress} onPress={openAdd}><Text style={s.fabText}>＋ เพิ่มรายการ</Text></Pressable></Animated.View>
 
-    <Modal visible={transactionModal} transparent animationType="slide" onRequestClose={() => setTransactionModal(false)}><KeyboardAvoidingView style={s.overlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'flex-end' }} keyboardShouldPersistTaps="handled"><View style={s.sheet}><View style={s.handle} /><Text style={s.sheetTitle}>{editing ? 'แก้ไขรายการ' : 'เพิ่มรายการใหม่'}</Text><View style={s.segment}>{['income','expense'].map((x) => <Pressable key={x} onPress={() => setType(x)} style={[s.segmentButton, type === x && { backgroundColor: x === 'income' ? C.green : C.red }]}><Text style={[s.segmentText, type === x && { color: C.white }]}>{x === 'income' ? '＋ รายรับ' : '− รายจ่าย'}</Text></Pressable>)}</View><Text style={s.label}>ชื่อรายการ</Text><TextInput style={s.input} value={title} onChangeText={setTitle} placeholder="เช่น ค่าอาหาร" /><Text style={s.label}>จำนวนเงิน</Text><TextInput style={[s.input, { fontSize: 20, fontWeight: '800' }]} value={amount} onChangeText={setAmount} keyboardType="numeric" placeholder="0" /><Text style={s.label}>วันที่ (YYYY-MM-DD)</Text><TextInput style={s.input} value={date} onChangeText={setDate} placeholder="2026-09-23" /><Text style={s.label}>หมวดหมู่</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.categoryChoices}>{categories.map((x) => <Pressable key={x} onPress={() => setCategory(x)} style={[s.categoryChoice, category === x && s.categoryChoiceOn]}><Text style={[s.categoryChoiceText, category === x && { color: C.green, fontWeight: '800' }]}>{x}</Text></Pressable>)}</ScrollView><Pressable style={s.primary} onPress={saveTransaction}><Text style={s.primaryText}>{editing ? 'บันทึกการแก้ไข' : 'บันทึกรายการ'}</Text></Pressable><Pressable style={s.cancel} onPress={() => setTransactionModal(false)}><Text style={s.cancelText}>ยกเลิก</Text></Pressable></View></ScrollView></KeyboardAvoidingView></Modal>
+    <Modal visible={transactionModal} transparent animationType="slide" onRequestClose={() => setTransactionModal(false)}><KeyboardAvoidingView style={s.overlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'flex-end' }} keyboardShouldPersistTaps="handled"><View style={s.sheet}><View style={s.handle} /><Text style={s.sheetTitle}>{editing ? 'แก้ไขรายการ' : 'เพิ่มรายการใหม่'}</Text><View style={s.segment}>{['income','expense'].map((x) => <Pressable key={x} onPress={() => setType(x)} style={[s.segmentButton, type === x && { backgroundColor: x === 'income' ? C.green : C.red }]}><Text style={[s.segmentText, type === x && { color: C.white }]}>{x === 'income' ? '＋ รายรับ' : '− รายจ่าย'}</Text></Pressable>)}</View><Text style={s.label}>ชื่อรายการ</Text><TextInput style={s.input} value={title} onChangeText={setTitle} placeholder="เช่น ค่าอาหาร" /><Text style={s.label}>จำนวนเงิน</Text><TextInput style={[s.input, { fontSize: 20, fontWeight: '800' }]} value={amount} onChangeText={setAmount} keyboardType="numeric" placeholder="0" /><Text style={s.label}>วันที่ (YYYY-MM-DD)</Text><TextInput style={s.input} value={date} onChangeText={setDate} placeholder="2026-09-23" /><Text style={s.label}>หมวดหมู่</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.categoryChoices}>{categories.map((x) => <Pressable key={x} onPress={() => setCategory(x)} style={[s.categoryChoice, category === x && s.categoryChoiceOn]}><Text style={[s.categoryChoiceText, category === x && { color: C.green, fontWeight: '800' }]}>{x}</Text></Pressable>)}</ScrollView>{!!transactionError && <Text style={s.formError}>{transactionError}</Text>}<Pressable disabled={savingTransaction} style={[s.primary, savingTransaction && { opacity: 0.6 }]} onPress={saveTransaction}><Text style={s.primaryText}>{savingTransaction ? 'กำลังบันทึก...' : editing ? 'บันทึกการแก้ไข' : 'บันทึกรายการ'}</Text></Pressable><Pressable disabled={savingTransaction} style={s.cancel} onPress={() => setTransactionModal(false)}><Text style={s.cancelText}>ยกเลิก</Text></Pressable></View></ScrollView></KeyboardAvoidingView></Modal>
 
     <Modal visible={categoryModal} transparent animationType="slide" onRequestClose={() => setCategoryModal(false)}><KeyboardAvoidingView style={s.overlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={s.sheet}><View style={s.handle} /><Text style={s.sheetTitle}>จัดการหมวดหมู่</Text><View style={s.inline}><TextInput style={[s.input, { flex: 1, marginBottom: 0 }]} value={newCategory} onChangeText={setNewCategory} placeholder="ชื่อหมวดหมู่ใหม่" /><Pressable style={s.addSmall} onPress={addCategory}><Text style={s.primaryText}>เพิ่ม</Text></Pressable></View><View style={{ marginTop: 16 }}>{categories.map((x) => <View key={x} style={s.manageRow}><Text style={s.manageName}>{x}</Text>{!DEFAULT_CATEGORIES.includes(x) && <Pressable onPress={() => removeCategory(x)}><Text style={s.delete}>ลบ</Text></Pressable>}</View>)}</View><Pressable style={s.cancel} onPress={() => setCategoryModal(false)}><Text style={s.cancelText}>เสร็จแล้ว</Text></Pressable></View></KeyboardAvoidingView></Modal>
 
@@ -377,7 +405,7 @@ const s = StyleSheet.create({
   fab: { position: 'absolute', right: 18, bottom: 22, backgroundColor: C.green, borderRadius: 28, paddingHorizontal: 20, height: 56, justifyContent: 'center', shadowColor: C.dark, shadowOpacity: .25, shadowRadius: 9, elevation: 7 }, fabPress: { flex: 1, justifyContent: 'center' }, fabText: { color: C.white, fontWeight: '900' },
   overlay: { flex: 1, backgroundColor: 'rgba(10,35,24,.45)', justifyContent: 'flex-end' }, sheet: { backgroundColor: C.white, borderTopLeftRadius: 27, borderTopRightRadius: 27, padding: 20, paddingBottom: Platform.OS === 'ios' ? 32 : 20, maxHeight: '92%' }, handle: { width: 42, height: 4, borderRadius: 2, backgroundColor: '#D5E1DA', alignSelf: 'center', marginBottom: 15 }, sheetTitle: { color: C.ink, fontSize: 21, fontWeight: '900', marginBottom: 15 },
   segment: { flexDirection: 'row', backgroundColor: '#EFF4F1', borderRadius: 13, padding: 4, gap: 4, marginBottom: 14 }, segmentButton: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' }, segmentText: { color: C.muted, fontWeight: '800' }, label: { color: C.ink, fontSize: 11, fontWeight: '800', marginBottom: 6 }, input: { borderWidth: 1, borderColor: C.line, backgroundColor: '#FAFCFA', borderRadius: 13, paddingHorizontal: 13, paddingVertical: Platform.OS === 'ios' ? 12 : 9, color: C.ink, marginBottom: 12 }, categoryChoices: { gap: 7, paddingBottom: 15 }, categoryChoice: { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 12, borderWidth: 1, borderColor: C.line }, categoryChoiceOn: { backgroundColor: C.pale, borderColor: C.lime }, categoryChoiceText: { color: C.muted, fontSize: 11 },
-  primary: { backgroundColor: C.green, borderRadius: 14, paddingVertical: 14, alignItems: 'center', minHeight: 48, justifyContent: 'center' }, primaryText: { color: C.white, fontWeight: '900' }, cancel: { alignItems: 'center', paddingVertical: 13 }, cancelText: { color: C.muted, fontWeight: '700' }, inline: { flexDirection: 'row', gap: 8 }, addSmall: { backgroundColor: C.green, borderRadius: 13, paddingHorizontal: 18, justifyContent: 'center' }, manageRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.line }, manageName: { color: C.ink, fontWeight: '700' },
+  formError: { color: C.red, backgroundColor: C.redPale, borderRadius: 11, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 12, fontSize: 12, lineHeight: 18, fontWeight: '700' }, primary: { backgroundColor: C.green, borderRadius: 14, paddingVertical: 14, alignItems: 'center', minHeight: 48, justifyContent: 'center' }, primaryText: { color: C.white, fontWeight: '900' }, cancel: { alignItems: 'center', paddingVertical: 13 }, cancelText: { color: C.muted, fontWeight: '700' }, inline: { flexDirection: 'row', gap: 8 }, addSmall: { backgroundColor: C.green, borderRadius: 13, paddingHorizontal: 18, justifyContent: 'center' }, manageRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.line }, manageName: { color: C.ink, fontWeight: '700' },
   authPage: { flex: 1, backgroundColor: C.dark }, authHero: { alignItems: 'center', paddingTop: 52, paddingBottom: 40 }, authEmoji: { fontSize: 44 }, authBrand: { color: C.white, fontSize: 30, fontWeight: '900', marginTop: 8 }, authSub: { color: '#A9CABB', marginTop: 5 }, authCard: { flex: 1, backgroundColor: C.bg, borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 22 }, authTabs: { flexDirection: 'row', backgroundColor: '#E7F0EA', borderRadius: 14, padding: 4, marginBottom: 22 }, authTab: { flex: 1, alignItems: 'center', paddingVertical: 10, borderRadius: 11 }, authTabOn: { backgroundColor: C.white }, authTabText: { color: C.muted, fontWeight: '800' }, authTabTextOn: { color: C.green }, demoButton: { alignItems: 'center', paddingVertical: 15 }, demoButtonText: { color: C.green, fontWeight: '800' }, authNotice: { color: C.red, backgroundColor: C.redPale, borderRadius: 11, padding: 11, marginTop: 10, textAlign: 'center', fontSize: 12, lineHeight: 18 }, authNoticeSuccess: { color: C.dark, backgroundColor: C.pale }, warning: { color: C.red, textAlign: 'center', fontSize: 11 },
 });
 
